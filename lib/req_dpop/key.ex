@@ -31,8 +31,14 @@ defmodule ReqDPoP.Key do
   """
   @spec load!(t() | JOSE.JWK.t() | map()) :: t()
   def load!(%__MODULE__{} = key), do: key
-  def load!(%JOSE.JWK{} = jwk), do: %__MODULE__{jwk: jwk}
-  def load!(map) when is_map(map), do: %__MODULE__{jwk: JOSE.JWK.from_map(map)}
+
+  def load!(%JOSE.JWK{} = jwk) do
+    %__MODULE__{jwk: jwk, alg: infer_alg(public_jwk(%__MODULE__{jwk: jwk}))}
+  end
+
+  def load!(map) when is_map(map) do
+    %__MODULE__{jwk: JOSE.JWK.from_map(map), alg: infer_alg(map)}
+  end
 
   def load!(other) do
     raise Error,
@@ -86,4 +92,10 @@ defmodule ReqDPoP.Key do
       reason: {:unsupported_alg, alg},
       message: "unsupported DPoP signing algorithm #{inspect(alg)}"
   end
+
+  defp infer_alg(%{"kty" => "EC", "crv" => "P-256"}), do: :es256
+  defp infer_alg(%{"kty" => "RSA"}), do: :rs256
+  defp infer_alg(%{kty: "EC", crv: "P-256"}), do: :es256
+  defp infer_alg(%{kty: "RSA"}), do: :rs256
+  defp infer_alg(_key), do: nil
 end

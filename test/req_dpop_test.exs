@@ -54,6 +54,30 @@ defmodule ReqDPoPTest do
     assert Key.thumbprint(key) == Key.thumbprint(exported)
   end
 
+  test "loaded ES256 key material keeps its algorithm" do
+    key =
+      :es256
+      |> Key.generate()
+      |> Key.export()
+      |> Key.load!()
+
+    proof = proof!(key: key)
+
+    assert protected(proof).alg == {:jose_jws_alg_ecdsa, :ES256}
+  end
+
+  test "loaded RS256 key material keeps its algorithm" do
+    key =
+      :rs256
+      |> Key.generate()
+      |> Key.export()
+      |> Key.load!()
+
+    proof = proof!(key: key)
+
+    assert protected(proof).alg == {:jose_jws_alg_rsa_pkcs1_v1_5, :RS256}
+  end
+
   test "attaches DPoP and Authorization headers" do
     key = Key.generate(:es256)
     parent = self()
