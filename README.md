@@ -16,7 +16,7 @@ when configured, attaches a DPoP-bound access token.
 ```elixir
 def deps do
   [
-    {:req_dpop, "~> 0.1.0"}
+    {:req_dpop, "~> 0.5"}
   ]
 end
 ```

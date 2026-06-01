@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.5.1
+
+- Correct the README installation snippet now that the package is published on
+  Hex.
+
 ## v0.5.0
 
 - Initial Req plugin for RFC 9449 DPoP proof generation.
