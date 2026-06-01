@@ -3,7 +3,7 @@ defmodule ReqDPoP.MixProject do
   use Mix.Project
 
   @version "0.5.1"
-  @url "https://github.com/neilberkman/req_dpop"
+  @url "https://github.com/XukuLLC/req_dpop"
   @maintainers ["Neil Berkman"]
 
   def project do
