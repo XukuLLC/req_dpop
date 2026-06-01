@@ -2,6 +2,7 @@ defmodule ReqDPoP.RFC9449Server do
   @moduledoc false
 
   @allowed_algs ~w(ES256 RS256)
+  @max_jti_length 256
 
   def adapter(opts) when is_list(opts) do
     fn request ->
@@ -36,6 +37,8 @@ defmodule ReqDPoP.RFC9449Server do
          {:ok, claims} <- verify_signature(proof, protected),
          :ok <- verify_htm(claims, request),
          :ok <- verify_htu(claims, request),
+         :ok <- verify_iat(claims),
+         :ok <- verify_jti(claims),
          :ok <- verify_access_token(claims, request, opts),
          :ok <- verify_nonce(claims, opts) do
       {:ok, claims}
@@ -106,6 +109,21 @@ defmodule ReqDPoP.RFC9449Server do
   end
 
   defp verify_htu(_claims, _request), do: {:error, :missing_htu}
+
+  defp verify_iat(%{"iat" => iat}) when is_integer(iat) and iat >= 0, do: :ok
+  defp verify_iat(%{"iat" => _iat}), do: {:error, :invalid_iat}
+  defp verify_iat(_claims), do: {:error, :missing_iat}
+
+  defp verify_jti(%{"jti" => jti}) when is_binary(jti) do
+    if jti != "" and byte_size(jti) <= @max_jti_length do
+      :ok
+    else
+      {:error, :invalid_jti}
+    end
+  end
+
+  defp verify_jti(%{"jti" => _jti}), do: {:error, :invalid_jti}
+  defp verify_jti(_claims), do: {:error, :missing_jti}
 
   defp verify_access_token(claims, request, opts) do
     case Keyword.fetch(opts, :access_token) do

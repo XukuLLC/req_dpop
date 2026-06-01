@@ -184,6 +184,64 @@ defmodule ReqDPoPTest do
                     }}
   end
 
+  test "server verifier rejects missing iat and jti claims" do
+    key = Key.generate(:es256)
+
+    request =
+      Req.Request.new(method: :get, url: "https://api.example.com/resource")
+      |> Req.Request.put_header(
+        "dpop",
+        signed_proof(key, %{"htm" => "GET", "htu" => "https://api.example.com/resource"})
+      )
+
+    assert {:error, :missing_iat} = ReqDPoP.RFC9449Server.verify_request(request, [])
+
+    request =
+      Req.Request.new(method: :get, url: "https://api.example.com/resource")
+      |> Req.Request.put_header(
+        "dpop",
+        signed_proof(key, %{
+          "htm" => "GET",
+          "htu" => "https://api.example.com/resource",
+          "iat" => @iat
+        })
+      )
+
+    assert {:error, :missing_jti} = ReqDPoP.RFC9449Server.verify_request(request, [])
+  end
+
+  test "server verifier rejects invalid iat and jti claims" do
+    key = Key.generate(:es256)
+
+    request =
+      Req.Request.new(method: :get, url: "https://api.example.com/resource")
+      |> Req.Request.put_header(
+        "dpop",
+        signed_proof(key, %{
+          "htm" => "GET",
+          "htu" => "https://api.example.com/resource",
+          "iat" => "not-an-integer",
+          "jti" => "jti"
+        })
+      )
+
+    assert {:error, :invalid_iat} = ReqDPoP.RFC9449Server.verify_request(request, [])
+
+    request =
+      Req.Request.new(method: :get, url: "https://api.example.com/resource")
+      |> Req.Request.put_header(
+        "dpop",
+        signed_proof(key, %{
+          "htm" => "GET",
+          "htu" => "https://api.example.com/resource",
+          "iat" => @iat,
+          "jti" => ""
+        })
+      )
+
+    assert {:error, :invalid_jti} = ReqDPoP.RFC9449Server.verify_request(request, [])
+  end
+
   test "excludes URL fragments from htu and preserves query string" do
     key = Key.generate(:es256)
     parent = self()
@@ -328,6 +386,20 @@ defmodule ReqDPoPTest do
       jti: fn -> "jti" end
     )
     |> ReqDPoP.proof!()
+  end
+
+  defp signed_proof(key, claims) do
+    header = %{
+      "alg" => "ES256",
+      "typ" => "dpop+jwt",
+      "jwk" => Key.public_jwk(key)
+    }
+
+    key
+    |> Key.jose_jwk()
+    |> JOSE.JWT.sign(header, claims)
+    |> JOSE.JWS.compact()
+    |> elem(1)
   end
 
   defp claims(proof) do
