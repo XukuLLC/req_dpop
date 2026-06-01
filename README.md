@@ -85,6 +85,9 @@ key = ReqDPoP.Key.load!(jwk)
 
 ## Development
 
+The test suite includes server-side interop checks against Attesto's DPoP
+verifier as a test-only dependency; Attesto is not required at runtime.
+
 ```sh
 mix format --check-formatted
 mix compile --warnings-as-errors
