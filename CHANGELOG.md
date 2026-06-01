@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.1.0
+## v0.5.0
 
 - Initial Req plugin for RFC 9449 DPoP proof generation.
 - Adds DPoP proof and optional `Authorization: DPoP ...` headers.
