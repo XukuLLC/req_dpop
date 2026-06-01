@@ -44,7 +44,6 @@ defmodule ReqDPoP.MixProject do
     [
       {:req, "~> 0.5"},
       {:jose, "~> 1.11"},
-      {:jason, "~> 1.4"},
 
       # test-only interop: prove generated proofs pass Attesto's server verifier
       # without making Attesto a runtime dependency of this client package.

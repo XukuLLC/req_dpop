@@ -168,6 +168,98 @@ defmodule ReqDPoPTest do
     assert verified.proof.htu == "https://api.example.com/resource"
   end
 
+  test "resource request proof is accepted by Auth0's Python DPoP verifier" do
+    case auth0_python() do
+      {:ok, python} ->
+        access_token = "access-token"
+        parent = self()
+        now = System.system_time(:second)
+
+        adapter = fn request ->
+          send(parent, {:request, request})
+          {request, %Req.Response{status: 200}}
+        end
+
+        Req.new(base_url: "https://api.example.com", adapter: adapter)
+        |> ReqDPoP.attach(
+          key: Key.generate(:es256),
+          access_token: access_token,
+          clock: fn -> now end,
+          jti: fn -> "auth0-python-resource-jti" end
+        )
+        |> Req.get!(url: "/resource", params: [a: "1"])
+
+        assert_receive {:request, request}
+
+        assert {:ok, claims} =
+                 auth0_verify_dpop(python,
+                   access_token: access_token,
+                   proof: request |> Req.Request.get_header("dpop") |> List.first(),
+                   method: "GET",
+                   url: "https://api.example.com/resource?a=1"
+                 )
+
+        assert claims["ath"] == ReqDPoP.ath(access_token)
+        assert claims["htm"] == "GET"
+        assert claims["htu"] == "https://api.example.com/resource"
+        assert claims["jti"] == "auth0-python-resource-jti"
+
+      {:skip, reason} ->
+        IO.puts("Skipping Auth0 Python DPoP verifier interop: #{reason}")
+        assert true
+    end
+  end
+
+  test "resource request is accepted by Auth0's full Python resource verifier" do
+    case auth0_python() do
+      {:ok, python} ->
+        dpop_key = Key.generate(:es256)
+        now = System.system_time(:second)
+        access_token = auth0_access_token(dpop_key, now)
+        parent = self()
+
+        adapter = fn request ->
+          send(parent, {:request, request})
+          {request, %Req.Response{status: 200}}
+        end
+
+        Req.new(base_url: "https://api.example.com", adapter: adapter)
+        |> ReqDPoP.attach(
+          key: dpop_key,
+          access_token: access_token.token,
+          clock: fn -> now end,
+          jti: fn -> "auth0-python-full-resource-jti" end
+        )
+        |> Req.get!(url: "/resource", params: [a: "1"])
+
+        assert_receive {:request, request}
+
+        assert {:ok, claims} =
+                 auth0_verify_dpop(python,
+                   mode: "verify_request",
+                   authorization:
+                     request |> Req.Request.get_header("authorization") |> List.first(),
+                   proof: request |> Req.Request.get_header("dpop") |> List.first(),
+                   method: "GET",
+                   url: "https://api.example.com/resource?a=1",
+                   issuer: access_token.issuer,
+                   audience: access_token.audience,
+                   domain: "issuer.example.com",
+                   jwks_uri: access_token.jwks_uri,
+                   jwk: access_token.public_jwk
+                 )
+
+        assert claims["cnf"]["jkt"] == Key.thumbprint(dpop_key)
+        assert claims["aud"] == access_token.audience
+        assert claims["iss"] == access_token.issuer
+        assert claims["sub"] == "client:req-dpop"
+
+      {:skip, reason} ->
+        IO.puts("Skipping Auth0 Python resource verifier interop: #{reason}")
+        assert true
+    end
+  end
+
   test "proof-only mode omits Authorization and ath" do
     key = Key.generate(:es256)
     parent = self()
@@ -477,10 +569,106 @@ defmodule ReqDPoPTest do
 
   defp protected(proof), do: JOSE.JWT.peek_protected(proof)
 
+  defp auth0_access_token(dpop_key, now) do
+    issuer = "https://issuer.example.com/"
+    audience = "https://api.example.com"
+    jwks_uri = "https://issuer.example.com/.well-known/jwks.json"
+    signing_key = JOSE.JWK.generate_key({:rsa, 2048})
+
+    public_jwk =
+      signing_key
+      |> JOSE.JWK.to_public()
+      |> JOSE.JWK.to_map()
+      |> elem(1)
+      |> Map.merge(%{"alg" => "RS256", "kid" => "auth0-python-test-key", "use" => "sig"})
+
+    claims = %{
+      "aud" => audience,
+      "cnf" => %{"jkt" => Key.thumbprint(dpop_key)},
+      "exp" => now + 300,
+      "iat" => now,
+      "iss" => issuer,
+      "sub" => "client:req-dpop"
+    }
+
+    token =
+      signing_key
+      |> JOSE.JWT.sign(%{"alg" => "RS256", "kid" => "auth0-python-test-key"}, claims)
+      |> JOSE.JWS.compact()
+      |> elem(1)
+
+    %{
+      audience: audience,
+      issuer: issuer,
+      jwks_uri: jwks_uri,
+      public_jwk: public_jwk,
+      token: token
+    }
+  end
+
   defp verifier_headers(request) do
     dpop = Req.Request.get_header(request, "dpop")
     authorization = Req.Request.get_header(request, "authorization")
 
     Enum.map(dpop, &{"dpop", &1}) ++ Enum.map(authorization, &{"authorization", &1})
+  end
+
+  defp auth0_python do
+    python = System.get_env("REQ_DPOP_PYTHON") || System.find_executable("python3")
+
+    cond do
+      is_nil(python) ->
+        {:skip, "python3 not found"}
+
+      not File.exists?(auth0_verifier_script()) ->
+        {:skip, "Auth0 verifier helper not found"}
+
+      true ->
+        case System.cmd(python, ["-c", "import auth0_api_python"], stderr_to_stdout: true) do
+          {_output, 0} -> {:ok, python}
+          {output, _status} -> {:skip, "auth0-api-python unavailable: #{String.trim(output)}"}
+        end
+    end
+  end
+
+  defp auth0_verify_dpop(python, opts) do
+    path =
+      Path.join(System.tmp_dir!(), "req_dpop_auth0_#{System.unique_integer([:positive])}.json")
+
+    data =
+      opts
+      |> Map.new()
+      |> JSON.encode!()
+
+    File.write!(path, data)
+
+    try do
+      case System.cmd(python, [auth0_verifier_script(), path], stderr_to_stdout: true) do
+        {output, 0} ->
+          {:ok, output |> last_json_line!() |> JSON.decode!() |> Map.fetch!("claims")}
+
+        {output, _status} ->
+          {:error, String.trim(output)}
+      end
+    after
+      File.rm(path)
+    end
+  end
+
+  defp auth0_verifier_script do
+    Path.expand("../test_support/python/auth0_dpop_verify.py", __DIR__)
+  end
+
+  defp last_json_line!(output) do
+    output
+    |> String.split("\n", trim: true)
+    |> Enum.reverse()
+    |> Enum.find_value(fn line ->
+      if String.starts_with?(line, "{"), do: line
+    end)
+    |> case do
+      nil -> raise "Python verifier emitted no JSON: #{output}"
+      line -> line
+    end
   end
 end
