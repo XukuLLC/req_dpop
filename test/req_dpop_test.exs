@@ -108,6 +108,32 @@ defmodule ReqDPoPTest do
     assert claims(proof)["ath"] == ReqDPoP.ath("access-token")
   end
 
+  test "resource request is accepted by an RFC 9449-style server verifier" do
+    access_token = "access-token"
+    adapter = ReqDPoP.RFC9449Server.adapter(access_token: access_token, notify: self())
+
+    response =
+      Req.new(base_url: "https://api.example.com", adapter: adapter)
+      |> ReqDPoP.attach(
+        key: Key.generate(:es256),
+        access_token: access_token,
+        clock: fn -> @iat end,
+        jti: fn -> "server-verified-jti" end
+      )
+      |> Req.get!(url: "/resource", params: [a: "1"])
+
+    assert response.status == 200
+
+    assert_receive {:accepted,
+                    %{
+                      "ath" => _ath,
+                      "htm" => "GET",
+                      "htu" => "https://api.example.com/resource?a=1",
+                      "iat" => @iat,
+                      "jti" => "server-verified-jti"
+                    }}
+  end
+
   test "proof-only mode omits Authorization and ath" do
     key = Key.generate(:es256)
     parent = self()
@@ -130,6 +156,32 @@ defmodule ReqDPoPTest do
     assert Req.Request.get_header(request, "authorization") == []
     refute Map.has_key?(claims(proof), "ath")
     assert claims(proof)["htu"] == "https://auth.example.com/oauth/token"
+  end
+
+  test "proof-only token request is accepted by an RFC 9449-style server verifier" do
+    adapter = ReqDPoP.RFC9449Server.adapter(notify: self())
+
+    response =
+      Req.new(adapter: adapter)
+      |> ReqDPoP.attach(
+        key: Key.generate(:es256),
+        clock: fn -> @iat end,
+        jti: fn -> "token-server-jti" end
+      )
+      |> Req.post!(
+        url: "https://auth.example.com/oauth/token",
+        form: [grant_type: "client_credentials"]
+      )
+
+    assert response.status == 200
+
+    assert_receive {:accepted,
+                    %{
+                      "htm" => "POST",
+                      "htu" => "https://auth.example.com/oauth/token",
+                      "iat" => @iat,
+                      "jti" => "token-server-jti"
+                    }}
   end
 
   test "excludes URL fragments from htu and preserves query string" do
@@ -188,6 +240,31 @@ defmodule ReqDPoPTest do
     refute Map.has_key?(first_claims, "nonce")
     assert second_claims["nonce"] == "server-nonce"
     assert Agent.get(counter, & &1) == 2
+  end
+
+  test "nonce retry satisfies an RFC 9449-style server verifier" do
+    access_token = "access-token"
+
+    adapter =
+      ReqDPoP.RFC9449Server.adapter(
+        access_token: access_token,
+        nonce: "server-nonce",
+        notify: self()
+      )
+
+    response =
+      Req.new(adapter: adapter)
+      |> ReqDPoP.attach(
+        key: Key.generate(:es256),
+        access_token: access_token,
+        clock: fn -> @iat end,
+        jti: fn -> "nonce-server-jti" end
+      )
+      |> Req.get!(url: "https://api.example.com/resource")
+
+    assert response.status == 200
+    assert_receive {:challenge, :use_dpop_nonce}
+    assert_receive {:accepted, %{"nonce" => "server-nonce", "jti" => "nonce-server-jti"}}
   end
 
   test "does not retry arbitrary 401 responses with DPoP-Nonce header" do

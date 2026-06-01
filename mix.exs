@@ -19,6 +19,7 @@ defmodule ReqDPoP.MixProject do
       homepage_url: @url,
       maintainers: @maintainers,
       deps: deps(),
+      elixirc_paths: elixirc_paths(Mix.env()),
       docs: docs(),
       aliases: aliases()
     ]
@@ -35,6 +36,9 @@ defmodule ReqDPoP.MixProject do
       extra_applications: [:crypto, :logger]
     ]
   end
+
+  defp elixirc_paths(:test), do: ["lib", "test_support"]
+  defp elixirc_paths(_env), do: ["lib"]
 
   defp deps do
     [
