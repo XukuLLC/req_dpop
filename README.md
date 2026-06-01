@@ -40,7 +40,8 @@ The plugin adds:
 - `ath` in the proof when an access token is present
 
 `htu` and `htm` are derived from the final Req request URL and method after Req
-has applied base URL, path, and query options.
+has applied base URL and path options. Per RFC 9449, `htu` excludes the request
+URL's query string and fragment.
 
 ## Token Endpoint Proof
 
@@ -79,7 +80,7 @@ key = ReqDPoP.Key.load!(jwk)
 - Do not log access tokens or private JWKs.
 - Do not store tokens globally.
 - `ath` is SHA-256 over the ASCII access token, encoded as unpadded base64url.
-- URL fragments are excluded from `htu`.
+- URL query strings and fragments are excluded from `htu`.
 - Supported signing algorithms are `:es256` and `:rs256`.
 
 ## Development

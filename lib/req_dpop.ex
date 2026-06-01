@@ -95,9 +95,16 @@ defmodule ReqDPoP do
   end
 
   @doc false
+  def normalize_htu(htu) when is_binary(htu) do
+    htu
+    |> URI.parse()
+    |> normalize_htu()
+  end
+
   def normalize_htu(%URI{} = uri) do
     uri
     |> Map.put(:fragment, nil)
+    |> Map.put(:query, nil)
     |> URI.to_string()
   end
 
@@ -156,7 +163,7 @@ defmodule ReqDPoP do
       |> required_option!(:htm)
       |> normalize_htm()
 
-    htu = required_option!(opts, :htu)
+    htu = opts |> required_option!(:htu) |> normalize_htu()
     access_token = Keyword.get(opts, :access_token)
     nonce = Keyword.get(opts, :nonce)
 

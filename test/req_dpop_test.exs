@@ -1,6 +1,7 @@
 defmodule ReqDPoPTest do
   use ExUnit.Case, async: true
 
+  alias Attesto.Test.DPoPVerifier
   alias ReqDPoP.Key
 
   @iat 1_700_000_000
@@ -21,7 +22,7 @@ defmodule ReqDPoPTest do
     assert claims(proof) == %{
              "ath" => ReqDPoP.ath("access-token"),
              "htm" => "POST",
-             "htu" => "https://api.example.com/resource?x=1",
+             "htu" => "https://api.example.com/resource",
              "iat" => @iat,
              "jti" => "test-jti"
            }
@@ -103,7 +104,7 @@ defmodule ReqDPoPTest do
     [proof] = Req.Request.get_header(request, "dpop")
     assert Req.Request.get_header(request, "authorization") == ["DPoP access-token"]
 
-    assert claims(proof)["htu"] == "https://api.example.com/resource?a=1"
+    assert claims(proof)["htu"] == "https://api.example.com/resource"
     assert claims(proof)["htm"] == "GET"
     assert claims(proof)["ath"] == ReqDPoP.ath("access-token")
   end
@@ -128,10 +129,43 @@ defmodule ReqDPoPTest do
                     %{
                       "ath" => _ath,
                       "htm" => "GET",
-                      "htu" => "https://api.example.com/resource?a=1",
+                      "htu" => "https://api.example.com/resource",
                       "iat" => @iat,
                       "jti" => "server-verified-jti"
                     }}
+  end
+
+  test "resource request proof is accepted by Attesto's DPoP verifier" do
+    access_token = "access-token"
+    parent = self()
+
+    adapter = fn request ->
+      send(parent, {:request, request})
+      {request, %Req.Response{status: 200}}
+    end
+
+    Req.new(base_url: "https://api.example.com", adapter: adapter)
+    |> ReqDPoP.attach(
+      key: Key.generate(:es256),
+      access_token: access_token,
+      clock: fn -> @iat end,
+      jti: fn -> "attesto-resource-jti" end
+    )
+    |> Req.get!(url: "/resource", params: [a: "1"])
+
+    assert_receive {:request, request}
+
+    assert {:ok, verified} =
+             DPoPVerifier.verify_request(
+               method: "GET",
+               url: "https://api.example.com/resource",
+               headers: verifier_headers(request),
+               now: @iat
+             )
+
+    assert verified.scheme == :dpop
+    assert verified.proof.htm == "GET"
+    assert verified.proof.htu == "https://api.example.com/resource"
   end
 
   test "proof-only mode omits Authorization and ath" do
@@ -182,6 +216,40 @@ defmodule ReqDPoPTest do
                       "iat" => @iat,
                       "jti" => "token-server-jti"
                     }}
+  end
+
+  test "proof-only token request is accepted by Attesto's DPoP verifier" do
+    parent = self()
+
+    adapter = fn request ->
+      send(parent, {:request, request})
+      {request, %Req.Response{status: 200}}
+    end
+
+    Req.new(adapter: adapter)
+    |> ReqDPoP.attach(
+      key: Key.generate(:es256),
+      clock: fn -> @iat end,
+      jti: fn -> "attesto-token-jti" end
+    )
+    |> Req.post!(
+      url: "https://auth.example.com/oauth/token",
+      form: [grant_type: "client_credentials"]
+    )
+
+    assert_receive {:request, request}
+
+    assert {:ok, verified} =
+             DPoPVerifier.verify_request(
+               method: "POST",
+               url: "https://auth.example.com/oauth/token",
+               headers: verifier_headers(request),
+               now: @iat
+             )
+
+    assert verified.scheme == :dpop
+    assert verified.proof.htm == "POST"
+    assert verified.proof.htu == "https://auth.example.com/oauth/token"
   end
 
   test "server verifier rejects missing iat and jti claims" do
@@ -242,7 +310,7 @@ defmodule ReqDPoPTest do
     assert {:error, :invalid_jti} = ReqDPoP.RFC9449Server.verify_request(request, [])
   end
 
-  test "excludes URL fragments from htu and preserves query string" do
+  test "excludes URL query strings and fragments from htu" do
     key = Key.generate(:es256)
     parent = self()
 
@@ -256,7 +324,7 @@ defmodule ReqDPoPTest do
     |> Req.get!(url: "https://api.example.com/resource?x=1&y=two#discard")
 
     assert_receive [proof]
-    assert claims(proof)["htu"] == "https://api.example.com/resource?x=1&y=two"
+    assert claims(proof)["htu"] == "https://api.example.com/resource"
   end
 
   test "retries once with nonce on DPoP nonce challenge" do
@@ -408,4 +476,11 @@ defmodule ReqDPoPTest do
   end
 
   defp protected(proof), do: JOSE.JWT.peek_protected(proof)
+
+  defp verifier_headers(request) do
+    dpop = Req.Request.get_header(request, "dpop")
+    authorization = Req.Request.get_header(request, "authorization")
+
+    Enum.map(dpop, &{"dpop", &1}) ++ Enum.map(authorization, &{"authorization", &1})
+  end
 end
