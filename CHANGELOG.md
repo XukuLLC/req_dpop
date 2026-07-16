@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.5.2
+
+- Raise the Req dependency floor to 0.6.1, the first release patched for
+  EEF-CVE-2026-49755 decompression-bomb denial of service.
+
 ## v0.5.1
 
 - Correct the README installation snippet now that the package is published on
