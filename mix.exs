@@ -2,7 +2,7 @@ defmodule ReqDPoP.MixProject do
   @moduledoc false
   use Mix.Project
 
-  @version "0.5.1"
+  @version "0.5.2"
   @url "https://github.com/XukuLLC/req_dpop"
   @maintainers ["Neil Berkman"]
 
@@ -42,7 +42,7 @@ defmodule ReqDPoP.MixProject do
 
   defp deps do
     [
-      {:req, "~> 0.5"},
+      {:req, ">= 0.6.1 and < 1.0.0"},
       {:jose, "~> 1.11"},
 
       # test-only interop: prove generated proofs pass Attesto's server verifier
