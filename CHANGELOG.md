@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.5.3
+
+- Raise the JOSE dependency floor to 1.11.12. This keeps the earlier security,
+  package-metadata, and Erlang/OTP 28 EC key fixes while also correctly
+  encoding Elixir `nil` as JSON `null` with Erlang/OTP's built-in JSON module.
+
 ## v0.5.2
 
 - Raise the Req dependency floor to 0.6.1, the first release patched for
