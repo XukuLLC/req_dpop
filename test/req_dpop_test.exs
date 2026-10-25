@@ -205,8 +205,7 @@ defmodule ReqDPoPTest do
         assert claims["jti"] == "auth0-python-resource-jti"
 
       {:skip, reason} ->
-        IO.puts("Skipping Auth0 Python DPoP verifier interop: #{reason}")
-        assert true
+        skip_interop("Auth0 Python DPoP verifier", reason)
     end
   end
 
@@ -255,8 +254,7 @@ defmodule ReqDPoPTest do
         assert claims["sub"] == "client:req-dpop"
 
       {:skip, reason} ->
-        IO.puts("Skipping Auth0 Python resource verifier interop: #{reason}")
-        assert true
+        skip_interop("Auth0 Python resource verifier", reason)
     end
   end
 
@@ -611,6 +609,17 @@ defmodule ReqDPoPTest do
     authorization = Req.Request.get_header(request, "authorization")
 
     Enum.map(dpop, &{"dpop", &1}) ++ Enum.map(authorization, &{"authorization", &1})
+  end
+
+  # CI installs the Python verifier, so a missing verifier there is a broken
+  # job, not a skip.
+  defp skip_interop(name, reason) do
+    if System.get_env("CI") do
+      flunk("#{name} interop unavailable in CI: #{reason}")
+    else
+      IO.puts("Skipping #{name} interop: #{reason}")
+      assert true
+    end
   end
 
   defp auth0_python do
