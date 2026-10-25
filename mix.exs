@@ -2,7 +2,7 @@ defmodule ReqDPoP.MixProject do
   @moduledoc false
   use Mix.Project
 
-  @version "0.5.3"
+  @version "0.6.0"
   @url "https://github.com/XukuLLC/req_dpop"
   @maintainers ["Neil Berkman"]
 
@@ -44,6 +44,11 @@ defmodule ReqDPoP.MixProject do
     [
       {:req, ">= 0.6.1 and < 1.0.0"},
       {:jose, "~> 1.11.12"},
+
+      # Req's HTTP client. Not used directly; the floor keeps consumers off
+      # mint releases with open advisories (EEF-CVE-2026-82672, -82728,
+      # -82729, -91043, -92103, -94194, all fixed by 1.10.2).
+      {:mint, ">= 1.10.2 and < 2.0.0"},
 
       # test-only interop: prove generated proofs pass Attesto's server verifier
       # without making Attesto a runtime dependency of this client package.
