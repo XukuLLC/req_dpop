@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.6.1
+
+Security:
+
+- Raise the JOSE dependency floor to 1.11.13, which fixes CVE-2026-65625
+  through CVE-2026-65632. ReqDPoP only signs proofs with the key its caller
+  configures, so none of those advisories reaches its own code; the floor
+  keeps an application that uses it from resolving an affected JOSE release.
+
 ## v0.6.0
 
 Security:
