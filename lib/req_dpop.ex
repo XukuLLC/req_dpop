@@ -147,12 +147,24 @@ defmodule ReqDPoP do
           path: path_or_root(uri.path)
       }
       |> URI.to_string()
+      |> utf8_htu!()
     else
       invalid_htu!()
     end
   end
 
   def normalize_htu(%URI{}), do: invalid_htu!()
+
+  # `htu` is a JSON string claim, so it must be valid UTF-8. A redirect
+  # `Location` header is raw bytes and need not be; JOSE cannot encode such a
+  # claim and fails with an Erlang JSON error.
+  defp utf8_htu!(htu) do
+    if String.valid?(htu) do
+      htu
+    else
+      raise Error, reason: {:invalid_option, :htu}, message: "htu must be valid UTF-8"
+    end
+  end
 
   defp invalid_htu! do
     raise Error,

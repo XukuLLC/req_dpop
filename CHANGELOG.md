@@ -1,5 +1,17 @@
 # Changelog
 
+## [Unreleased]
+
+Fixes:
+
+- A redirect whose `Location` header is not valid UTF-8 made the plugin raise
+  a bare `ErlangError` from JOSE's JSON encoder while signing the next hop's
+  proof, and `ReqDPoP.proof/1` raised the same error for such an `htu` instead
+  of returning an error tuple. `htu` must now be valid UTF-8: the plugin raises
+  `ReqDPoP.Error` with reason `{:invalid_option, :htu}`, as it does for any
+  other `htu` it cannot sign, and `proof/1` returns
+  `{:error, %ReqDPoP.Error{reason: {:invalid_option, :htu}}}`.
+
 ## v0.6.1
 
 Security:

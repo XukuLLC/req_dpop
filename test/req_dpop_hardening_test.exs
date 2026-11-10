@@ -248,6 +248,31 @@ defmodule ReqDPoPHardeningTest do
       assert claims(first)["jti"] != claims(second)["jti"]
     end
 
+    test "a redirect Location that is not valid UTF-8 raises ReqDPoP.Error" do
+      {:ok, log} = Agent.start_link(fn -> [] end)
+
+      adapter =
+        adapter(log, fn
+          %{url: %{path: "/resource"}}, _attempt ->
+            Req.Response.new(status: 302, headers: %{"location" => ["/caf" <> <<0xE9>>]})
+
+          _request, _attempt ->
+            Req.Response.new(status: 200, body: "ok")
+        end)
+
+      request =
+        Req.new(adapter: adapter, retry: false, redirect_log_level: false)
+        |> ReqDPoP.attach(key: Key.generate(:es256), access_token: "tok")
+
+      error =
+        assert_raise ReqDPoP.Error, fn ->
+          Req.get(request, url: "https://api.example.com/resource")
+        end
+
+      assert error.reason == {:invalid_option, :htu}
+      assert [_first] = requests(log)
+    end
+
     test "signs the changed method after a 303 redirect" do
       {:ok, log} = Agent.start_link(fn -> [] end)
 
@@ -527,6 +552,23 @@ defmodule ReqDPoPHardeningTest do
                  ReqDPoP.proof(key: key, htm: :get, htu: htu),
                "expected #{htu} to be rejected"
       end
+    end
+
+    test "rejects a URI that is not valid UTF-8 and keeps percent-encoded bytes" do
+      key = Key.generate(:es256)
+
+      for htu <- [
+            "https://api.example.com/caf" <> <<0xE9>>,
+            "https://caf" <> <<0xE9>> <> ".example/"
+          ] do
+        assert {:error, %ReqDPoP.Error{reason: {:invalid_option, :htu}}} =
+                 ReqDPoP.proof(key: key, htm: :get, htu: htu)
+      end
+
+      assert {:ok, proof} =
+               ReqDPoP.proof(key: key, htm: :get, htu: "https://api.example.com/caf%E9")
+
+      assert claims(proof)["htu"] == "https://api.example.com/caf%E9"
     end
   end
 
