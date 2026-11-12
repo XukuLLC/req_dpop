@@ -2,7 +2,7 @@ defmodule ReqDPoP.MixProject do
   @moduledoc false
   use Mix.Project
 
-  @version "0.6.2"
+  @version "0.7.0"
   @url "https://github.com/XukuLLC/req_dpop"
   @maintainers ["Neil Berkman"]
 

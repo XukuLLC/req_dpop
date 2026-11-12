@@ -223,6 +223,219 @@ defmodule ReqDPoPHardeningTest do
     end
   end
 
+  describe "target URI override" do
+    test ":origin replaces scheme, host and port and keeps the path" do
+      {:ok, log} = Agent.start_link(fn -> [] end)
+      adapter = adapter(log, fn _request, _attempt -> Req.Response.new(status: 200) end)
+
+      Req.new(adapter: adapter, retry: false)
+      |> ReqDPoP.attach(key: Key.generate(:es256), origin: "HTTPS://API.Example.com")
+      |> Req.get!(url: "http://api.internal:4000/v1/resource?x=1")
+
+      [request] = requests(log)
+      assert request.url.host == "api.internal"
+      assert claims(request)["htu"] == "https://api.example.com/v1/resource"
+    end
+
+    test ":origin keeps a non-default port" do
+      {:ok, log} = Agent.start_link(fn -> [] end)
+      adapter = adapter(log, fn _request, _attempt -> Req.Response.new(status: 200) end)
+
+      Req.new(adapter: adapter, retry: false)
+      |> ReqDPoP.attach(key: Key.generate(:es256), origin: "https://api.example.com:8443/")
+      |> Req.get!(url: "http://10.0.0.5/resource")
+
+      [request] = requests(log)
+      assert claims(request)["htu"] == "https://api.example.com:8443/resource"
+    end
+
+    test ":htu receives the request and its result is normalized" do
+      {:ok, log} = Agent.start_link(fn -> [] end)
+      adapter = adapter(log, fn _request, _attempt -> Req.Response.new(status: 200) end)
+
+      htu = fn %Req.Request{} = request ->
+        "https://API.example.com/public" <> request.url.path <> "?dropped=1#frag"
+      end
+
+      Req.new(adapter: adapter, retry: false)
+      |> ReqDPoP.attach(key: Key.generate(:es256), htu: htu)
+      |> Req.get!(url: "http://api.internal/resource")
+
+      [request] = requests(log)
+      assert claims(request)["htu"] == "https://api.example.com/public/resource"
+    end
+
+    test ":htu may return a URI" do
+      {:ok, log} = Agent.start_link(fn -> [] end)
+      adapter = adapter(log, fn _request, _attempt -> Req.Response.new(status: 200) end)
+
+      Req.new(adapter: adapter, retry: false)
+      |> ReqDPoP.attach(
+        key: Key.generate(:es256),
+        htu: fn request ->
+          %{request.url | scheme: "https", host: "api.example.com", port: 443}
+        end
+      )
+      |> Req.get!(url: "http://api.internal:4000/resource")
+
+      [request] = requests(log)
+      assert claims(request)["htu"] == "https://api.example.com/resource"
+    end
+
+    test "the nonce retry signs the overridden target" do
+      {:ok, log} = Agent.start_link(fn -> [] end)
+
+      adapter =
+        adapter(log, fn
+          _request, 1 -> rs_challenge("rs-nonce")
+          _request, _attempt -> Req.Response.new(status: 200, body: "ok")
+        end)
+
+      response =
+        Req.new(adapter: adapter, retry: false)
+        |> ReqDPoP.attach(
+          key: Key.generate(:es256),
+          access_token: "tok",
+          origin: "https://api.example.com"
+        )
+        |> Req.get!(url: "http://api.internal:4000/resource")
+
+      assert response.status == 200
+      [first, second] = requests(log)
+      assert claims(first)["htu"] == "https://api.example.com/resource"
+      assert claims(second)["htu"] == "https://api.example.com/resource"
+      assert claims(second)["nonce"] == "rs-nonce"
+    end
+
+    test "a same-origin redirect keeps the override and signs the new path" do
+      {:ok, log} = Agent.start_link(fn -> [] end)
+
+      adapter =
+        adapter(log, fn
+          %{url: %{path: "/resource"}}, _attempt ->
+            Req.Response.new(status: 301, headers: %{"location" => ["/resource/"]})
+
+          _request, _attempt ->
+            Req.Response.new(status: 200, body: "ok")
+        end)
+
+      Req.new(adapter: adapter, retry: false, redirect_log_level: false)
+      |> ReqDPoP.attach(key: Key.generate(:es256), origin: "https://api.example.com")
+      |> Req.get!(url: "http://api.internal:4000/resource")
+
+      [_first, second] = requests(log)
+      assert claims(second)["htu"] == "https://api.example.com/resource/"
+    end
+
+    test "a trusted redirect to another origin signs its own URL" do
+      for override <- [
+            [origin: "https://api.example.com"],
+            [htu: fn request -> "https://api.example.com" <> request.url.path end]
+          ] do
+        {:ok, log} = Agent.start_link(fn -> [] end)
+
+        adapter =
+          adapter(log, fn
+            %{url: %{host: "api.internal"}}, _attempt ->
+              Req.Response.new(status: 302, headers: %{"location" => ["https://other.example/x"]})
+
+            _request, _attempt ->
+              Req.Response.new(status: 200, body: "ok")
+          end)
+
+        Req.new(adapter: adapter, retry: false, redirect_log_level: false, redirect_trusted: true)
+        |> ReqDPoP.attach([key: Key.generate(:es256), access_token: "tok"] ++ override)
+        |> Req.get!(url: "http://api.internal:4000/resource")
+
+        [first, second] = requests(log)
+        assert claims(first)["htu"] == "https://api.example.com/resource"
+        assert claims(second)["htu"] == "https://other.example/x"
+      end
+    end
+
+    test "an untrusted redirect to another origin still gets no proof" do
+      {:ok, log} = Agent.start_link(fn -> [] end)
+
+      adapter =
+        adapter(log, fn
+          %{url: %{host: "api.internal"}}, _attempt ->
+            Req.Response.new(status: 302, headers: %{"location" => ["https://other.example/x"]})
+
+          _request, _attempt ->
+            Req.Response.new(status: 200, body: "ok")
+        end)
+
+      Req.new(adapter: adapter, retry: false, redirect_log_level: false)
+      |> ReqDPoP.attach(key: Key.generate(:es256), origin: "https://api.example.com")
+      |> Req.get!(url: "http://api.internal:4000/resource")
+
+      [_first, second] = requests(log)
+      assert Req.Request.get_header(second, "dpop") == []
+    end
+
+    test "a static :htu is rejected at attach time" do
+      for htu <- [
+            "https://api.example.com/resource",
+            URI.parse("https://api.example.com/"),
+            fn -> "x" end
+          ] do
+        error =
+          assert_raise ReqDPoP.Error, fn ->
+            ReqDPoP.attach(Req.new(), key: Key.generate(:es256), htu: htu)
+          end
+
+        assert error.reason == {:invalid_option, :htu}
+      end
+    end
+
+    test ":htu and :origin together are rejected" do
+      error =
+        assert_raise ReqDPoP.Error, fn ->
+          ReqDPoP.attach(Req.new(),
+            key: Key.generate(:es256),
+            htu: fn request -> request.url end,
+            origin: "https://api.example.com"
+          )
+        end
+
+      assert error.reason == {:conflicting_option, :origin}
+    end
+
+    test "an :origin that is not a bare http or https origin is rejected" do
+      for origin <- [
+            "api.example.com",
+            "ftp://api.example.com",
+            "https://api.example.com/v1",
+            "https://api.example.com?x=1",
+            "https://api.example.com#f",
+            "https://user@api.example.com",
+            "https://",
+            :"https://api.example.com"
+          ] do
+        error =
+          assert_raise ReqDPoP.Error, fn ->
+            ReqDPoP.attach(Req.new(), key: Key.generate(:es256), origin: origin)
+          end
+
+        assert error.reason == {:invalid_option, :origin},
+               "expected #{inspect(origin)} to be rejected"
+      end
+    end
+
+    test "an :htu function that returns something unusable raises ReqDPoP.Error" do
+      for result <- [nil, :nope, "/relative"] do
+        request =
+          Req.new(adapter: fn request -> {request, Req.Response.new(status: 200)} end)
+          |> ReqDPoP.attach(key: Key.generate(:es256), htu: fn _request -> result end)
+
+        error =
+          assert_raise ReqDPoP.Error, fn -> Req.get!(request, url: "https://api.example.com/") end
+
+        assert error.reason == {:invalid_option, :htu}
+      end
+    end
+  end
+
   describe "redirects and retries" do
     test "re-signs the proof on a same-origin redirect" do
       {:ok, log} = Agent.start_link(fn -> [] end)

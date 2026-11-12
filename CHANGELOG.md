@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.7.0
+
+Added:
+
+- `ReqDPoP.attach/2` accepts `:origin` and `:htu` to sign a target URI other
+  than the URL the request is sent to. RFC 9449 section 4.2 defines `htu` as
+  the request's target URI, which differs from the connection URL when a
+  client reaches a server at an internal address and sends the public
+  authority in `Host`. Until now the only way to sign the public URI was
+  `ReqDPoP.proof!/1`, which gives up the plugin's nonce retry.
+  `:origin` replaces scheme, host and port and keeps the request path. `:htu`
+  is a one-argument function of the request that returns the `htu`; a fixed
+  string raises `ReqDPoP.Error` with reason `{:invalid_option, :htu}`, because
+  it would be signed into every request. Setting both raises with reason
+  `{:conflicting_option, :origin}`. The override applies to the origin of the
+  first hop, nonce retries included. A redirect hop to another origin signs
+  its own URL.
+
 ## v0.6.2
 
 Fixes:

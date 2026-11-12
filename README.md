@@ -16,7 +16,7 @@ when configured, attaches a DPoP-bound access token.
 ```elixir
 def deps do
   [
-    {:req_dpop, "~> 0.6"}
+    {:req_dpop, "~> 0.7"}
   ]
 end
 ```
@@ -42,6 +42,31 @@ The plugin adds:
 `htu` and `htm` are derived from the final Req request URL and method after Req
 has applied base URL and path options. Per RFC 9449, `htu` excludes the request
 URL's query string and fragment.
+
+### Target URI override
+
+When a request is sent to one address and its target URI is another, for
+example an internal address with the public authority in `Host`, the URL Req
+sends to is not the URI the server checks the proof against (RFC 9449 sections
+4.2 and 4.3). `:origin` signs a different scheme, host and port and keeps the
+request path:
+
+```elixir
+Req.new(base_url: "http://api.internal:4000", headers: [host: "api.example.com"])
+|> ReqDPoP.attach(key: key, access_token: access_token, origin: "https://api.example.com")
+|> Req.get!(url: "/resource")
+# htu: https://api.example.com/resource
+```
+
+`:htu` takes a one-argument function of the request and returns the `htu` to
+sign, for a mapping `:origin` cannot express. A fixed string is rejected: it
+would be signed into every request the client makes.
+
+Use an override only when the request's target URI differs from the URL it is
+sent to. A server that rejects a correct proof because it reconstructs its own
+URI wrongly has a configuration bug, and signing the URI it expects hides that
+bug. The override applies to the origin of the first hop, including nonce
+retries; a redirect hop to another origin signs its own URL.
 
 ## Token Endpoint Proof
 
