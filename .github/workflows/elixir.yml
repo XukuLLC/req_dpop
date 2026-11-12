@@ -51,8 +51,8 @@ jobs:
           path: |
             deps
             _build
-          key: ${{ runner.os }}-mix-${{ matrix.req }}-${{ hashFiles('mix.lock') }}
-          restore-keys: ${{ runner.os }}-mix-${{ matrix.req }}-
+          key: ${{ runner.os }}-otp${{ matrix.otp }}-mix-${{ matrix.req }}-${{ hashFiles('mix.lock') }}
+          restore-keys: ${{ runner.os }}-otp${{ matrix.otp }}-mix-${{ matrix.req }}-
 
       - name: Install dependencies
         run: mix deps.get
