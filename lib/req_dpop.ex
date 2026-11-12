@@ -21,6 +21,37 @@ defmodule ReqDPoP do
   header, and the plugin drops the `DPoP` header, in proof-only mode as well.
   The redirect target receives neither the token nor a proof unless Req's
   `redirect_trusted: true` is set.
+
+  ## Target URI override
+
+  RFC 9449 section 4.2 defines `htu` as the target URI of the request the proof
+  is attached to, and by default the plugin signs the URL Req sends the request
+  to. Those two differ when a client connects to one address for a request
+  whose target is another, for example an internal address with the public
+  authority in the `Host` header. The server reconstructs the public URI
+  (section 4.3) and rejects a proof signed for the internal one.
+
+  `:origin` covers that case by replacing scheme, host and port and keeping the
+  request path:
+
+      Req.new(base_url: "http://api.internal:4000", headers: [host: "api.example.com"])
+      |> ReqDPoP.attach(key: key, access_token: access_token, origin: "https://api.example.com")
+
+  `:htu` takes a function of the request for anything `:origin` cannot express,
+  such as a public path prefix:
+
+      ReqDPoP.attach(request, key: key, htu: fn request -> "https://api.example.com/v1" <> request.url.path end)
+
+  An override is correct only when the request's target URI differs from the
+  URL it is sent to. A server that rejects a correct proof because it
+  reconstructs its own URI wrongly has a bug in its own configuration; signing
+  the URI that server expects hides the bug and binds the proof to a URI the
+  request was not made to.
+
+  The override applies to requests sent to the origin of the first hop,
+  including nonce retries, Req retries and same-origin redirects. A hop to any
+  other origin, which the plugin signs only under `redirect_trusted: true`,
+  signs its own URL.
   """
 
   alias ReqDPoP.Error
@@ -38,8 +69,11 @@ defmodule ReqDPoP do
           | {:jti, jti()}
           | {:alg, alg()}
 
+  @type htu_fun :: (Req.Request.t() -> binary() | URI.t())
   @type attach_option ::
           proof_option()
+          | {:htu, htu_fun()}
+          | {:origin, binary()}
           | {:retry_on_nonce, boolean()}
           | {:max_nonce_retries, non_neg_integer()}
 
@@ -71,10 +105,19 @@ defmodule ReqDPoP do
     * `:jti` - injectable JTI generator for tests.
     * `:alg` - optional. Must match the key type: `:es256` for P-256 EC keys,
       `:rs256` for RSA keys.
+    * `:origin` - optional `http` or `https` origin, such as
+      `"https://api.example.com"`, signed into `htu` in place of the scheme,
+      host and port of the URL the request is sent to. The request path is
+      kept. See "Target URI override" in the module documentation.
+    * `:htu` - optional one-argument function that receives the `Req.Request`
+      and returns the `htu` to sign, as a string or `URI`. The result is
+      normalized like any other `htu`: query and fragment are dropped. A
+      static string is rejected, because it would be signed into every request
+      the client makes whatever its path. Cannot be combined with `:origin`.
   """
   @spec attach(Req.Request.t(), [attach_option()]) :: Req.Request.t()
   def attach(%Req.Request{} = request, opts) when is_list(opts) do
-    config = config!(opts)
+    config = opts |> config!() |> Map.put(:target, target!(opts))
 
     request =
       request
@@ -233,12 +276,36 @@ defmodule ReqDPoP do
     proof =
       build_proof!(request, config,
         htm: request.method,
-        htu: request.url,
+        htu: target_uri(request, config.target),
         access_token: access_token,
         nonce: stored_nonce(request) || config.nonce
       )
 
     Req.Request.put_header(request, "dpop", proof)
+  end
+
+  # A target override describes the origin the first hop was sent to. A hop
+  # to any other origin signs its own URL.
+  defp target_uri(request, nil), do: request.url
+
+  defp target_uri(request, target) do
+    if same_origin?(request), do: override_uri(request, target), else: request.url
+  end
+
+  defp override_uri(request, {:origin, {scheme, host, port}}) do
+    %{request.url | scheme: scheme, host: host, port: port, authority: nil}
+  end
+
+  defp override_uri(request, {:htu, fun}) do
+    case fun.(request) do
+      htu when is_binary(htu) or is_struct(htu, URI) ->
+        htu
+
+      _other ->
+        raise Error,
+          reason: {:invalid_option, :htu},
+          message: ":htu must return a string or a URI"
+    end
   end
 
   defp origin(%URI{scheme: scheme, host: host, port: port}), do: {scheme, host, port}
@@ -420,6 +487,58 @@ defmodule ReqDPoP do
       clock: option!(opts, :clock, fn -> System.system_time(:second) end, &integer_or_fun?/1),
       jti: option!(opts, :jti, &default_jti/0, &value_or_fun?/1)
     }
+  end
+
+  # `:htu` and `:origin` are attach-only: `proof/1` takes `:htu` as the value
+  # to sign.
+  defp target!(opts) do
+    case {Keyword.get(opts, :htu), Keyword.get(opts, :origin)} do
+      {nil, nil} ->
+        nil
+
+      {htu, nil} when is_function(htu, 1) ->
+        {:htu, htu}
+
+      {nil, origin} ->
+        {:origin, origin!(origin)}
+
+      {_htu, nil} ->
+        raise Error,
+          reason: {:invalid_option, :htu},
+          message:
+            ":htu must be a one-argument function of the request; a fixed value " <>
+              "would be signed into every request. Use :origin to replace the origin"
+
+      {_htu, _origin} ->
+        raise Error,
+          reason: {:conflicting_option, :origin},
+          message: ":htu and :origin both set the proof's htu; use one of them"
+    end
+  end
+
+  # An origin is scheme, host and optional port (RFC 6454). Reuse the htu
+  # normalization for the scheme and host rules, then require that nothing
+  # else was given.
+  defp origin!(origin) when is_binary(origin) do
+    uri = URI.parse(origin)
+    normalized = uri |> normalize_htu() |> URI.parse()
+
+    if uri.path in [nil, "", "/"] and is_nil(uri.query) and is_nil(uri.fragment) and
+         is_nil(uri.userinfo) do
+      {normalized.scheme, normalized.host, normalized.port}
+    else
+      invalid_origin!()
+    end
+  rescue
+    Error -> invalid_origin!()
+  end
+
+  defp origin!(_origin), do: invalid_origin!()
+
+  defp invalid_origin! do
+    raise Error,
+      reason: {:invalid_option, :origin},
+      message: ":origin must be an http or https origin such as \"https://api.example.com\""
   end
 
   defp option!(opts, name, default, valid?) do
