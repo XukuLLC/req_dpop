@@ -254,6 +254,8 @@ defmodule ReqDPoP do
           _stripped -> Req.Request.delete_header(request, "dpop")
         end
     end
+  rescue
+    error in Error -> {request, error}
   end
 
   defp check_auth_conflict!(request, access_token) do

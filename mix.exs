@@ -2,7 +2,7 @@ defmodule ReqDPoP.MixProject do
   @moduledoc false
   use Mix.Project
 
-  @version "0.7.0"
+  @version "0.7.1"
   @url "https://github.com/XukuLLC/req_dpop"
   @maintainers ["Neil Berkman"]
 
@@ -52,13 +52,21 @@ defmodule ReqDPoP.MixProject do
 
       # test-only interop: prove generated proofs pass Attesto's server verifier
       # without making Attesto a runtime dependency of this client package.
-      {:attesto, "~> 2.19", only: :test, runtime: false},
+      attesto_test_dep(),
 
       # dev / quality
       {:ex_doc, "~> 0.40", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:quokka, "~> 2.12", only: [:dev, :test], runtime: false}
     ]
+  end
+
+  defp attesto_test_dep do
+    if System.get_env("ATTESTO_PATH") in ["1", "true"] do
+      {:attesto, path: "../attesto", override: true, only: :test, runtime: false}
+    else
+      {:attesto, "~> 2.20", only: :test, runtime: false}
+    end
   end
 
   defp aliases do

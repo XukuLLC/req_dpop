@@ -461,7 +461,7 @@ defmodule ReqDPoPHardeningTest do
       assert claims(first)["jti"] != claims(second)["jti"]
     end
 
-    test "a redirect Location that is not valid UTF-8 raises ReqDPoP.Error" do
+    test "a redirect Location that is not valid UTF-8 returns {:error, %ReqDPoP.Error{}} on Req.get and raises on Req.get!" do
       {:ok, log} = Agent.start_link(fn -> [] end)
 
       adapter =
@@ -477,13 +477,16 @@ defmodule ReqDPoPHardeningTest do
         Req.new(adapter: adapter, retry: false, redirect_log_level: false)
         |> ReqDPoP.attach(key: Key.generate(:es256), access_token: "tok")
 
+      assert {:error, %ReqDPoP.Error{reason: {:invalid_option, :htu}}} =
+               Req.get(request, url: "https://api.example.com/resource")
+
       error =
         assert_raise ReqDPoP.Error, fn ->
-          Req.get(request, url: "https://api.example.com/resource")
+          Req.get!(request, url: "https://api.example.com/resource")
         end
 
       assert error.reason == {:invalid_option, :htu}
-      assert [_first] = requests(log)
+      assert [_first, _second] = requests(log)
     end
 
     test "signs the changed method after a 303 redirect" do
