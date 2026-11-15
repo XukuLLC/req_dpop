@@ -1,6 +1,8 @@
 defmodule ReqDPoPTest do
   use ExUnit.Case, async: true
 
+  alias Attesto.DPoP
+  alias Attesto.DPoP.Proof
   alias Attesto.Test.DPoPVerifier
   alias ReqDPoP.Key
 
@@ -533,6 +535,71 @@ defmodule ReqDPoPTest do
 
     assert response.status == 401
     assert Agent.get(counter, & &1) == 2
+  end
+
+  test "matches Attesto core Proof.build/3 and verify_proof/2 on the 12-URL htu matrix" do
+    key = Key.generate(:es256)
+    jose = Key.jose_jwk(key)
+    now = System.system_time(:second)
+
+    accepted_by_both = [
+      {"https://API.Example/a", "https://api.example/a"},
+      {"https://api.example:443/a", "https://api.example/a"},
+      {"https://api.example", "https://api.example/"},
+      {"https://api.example/a?x=1#frag", "https://api.example/a"},
+      {"https://[::1]:8443/a", "https://[::1]:8443/a"}
+    ]
+
+    for {client_url, server_expected} <- accepted_by_both do
+      assert {:ok, proof} =
+               ReqDPoP.proof(key: key, htm: "GET", htu: client_url, clock: fn -> now end)
+
+      assert claims(proof)["htu"] == server_expected
+      assert {:ok, core_proof} = Proof.build(jose, "GET", client_url)
+      assert String.downcase(claims(core_proof)["htu"]) == claims(proof)["htu"]
+
+      assert {:ok, _verified} =
+               DPoP.verify_proof(proof, http_method: "GET", http_uri: server_expected, now: now)
+    end
+
+    client_normalized_valid = [
+      {"https://user:pw@api.example/a", "https://api.example/a"},
+      {"https://api.example/a%zz", "https://api.example/a%zz"}
+    ]
+
+    for {client_url, server_expected} <- client_normalized_valid do
+      assert {:error, :invalid_htu} = Proof.build(jose, "GET", client_url)
+
+      assert {:ok, proof} =
+               ReqDPoP.proof(key: key, htm: "GET", htu: client_url, clock: fn -> now end)
+
+      assert claims(proof)["htu"] == server_expected
+
+      assert {:ok, _verified} =
+               DPoP.verify_proof(proof, http_method: "GET", http_uri: server_expected, now: now)
+    end
+
+    refused_by_server = [
+      {"https://api.example./a", "https://api.example/a", true},
+      {"https://api.example/a%2fb", "https://api.example/a%2Fb", true},
+      {"https://api.example/a/../b", "https://api.example/b", true},
+      {"https://api.example/café", "https://api.example/café", false},
+      {"http://api.example/a", "http://api.example/a", false}
+    ]
+
+    for {client_url, server_expected, core_builds?} <- refused_by_server do
+      if core_builds? do
+        assert {:ok, _core_proof} = Proof.build(jose, "GET", client_url)
+      else
+        assert {:error, :invalid_htu} = Proof.build(jose, "GET", client_url)
+      end
+
+      assert {:ok, proof} =
+               ReqDPoP.proof(key: key, htm: "GET", htu: client_url, clock: fn -> now end)
+
+      assert {:error, :invalid_htu} =
+               DPoP.verify_proof(proof, http_method: "GET", http_uri: server_expected, now: now)
+    end
   end
 
   defp proof!(opts) do

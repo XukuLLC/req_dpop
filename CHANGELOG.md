@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.7.1
+
+Fixes:
+
+- Return `{request, %ReqDPoP.Error{}}` when rescuing any `ReqDPoP.Error` raised
+  during the Req request step (including `htu` construction on redirects such as
+  a non-UTF-8 `Location`, `:auth` option conflicts, invalid options, and callback
+  type errors), so `Req.get/2` returns `{:error, %ReqDPoP.Error{}}` instead of
+  raising while `Req.get!/2` continues to raise; `ReqDPoP.Error` raised in the
+  response step (for example on an invalid nonce retry) still raises.
+
 ## v0.7.0
 
 Added:
