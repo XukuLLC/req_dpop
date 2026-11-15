@@ -65,7 +65,7 @@ defmodule ReqDPoP.MixProject do
     if System.get_env("ATTESTO_PATH") in ["1", "true"] do
       {:attesto, path: "../attesto", override: true, only: :test, runtime: false}
     else
-      {:attesto, "~> 2.20", only: :test, runtime: false}
+      {:attesto, "~> 2.21", only: :test, runtime: false}
     end
   end
 
