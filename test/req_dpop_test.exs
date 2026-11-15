@@ -111,6 +111,44 @@ defmodule ReqDPoPTest do
     assert claims(proof)["ath"] == ReqDPoP.ath("access-token")
   end
 
+  test "supports HTTP QUERY method (RFC 10008) in proof/1 and attach/2" do
+    key = Key.generate(:es256)
+
+    {:ok, query_proof} =
+      ReqDPoP.proof(
+        key: key,
+        htm: :query,
+        htu: "https://api.example.com/search",
+        clock: fn -> @iat end,
+        jti: fn -> "query-jti" end
+      )
+
+    assert claims(query_proof)["htm"] == "QUERY"
+
+    parent = self()
+
+    adapter = fn request ->
+      send(parent, {:query_request, request})
+      {request, %Req.Response{status: 200, body: "ok"}}
+    end
+
+    response =
+      Req.new(base_url: "https://api.example.com", adapter: adapter)
+      |> ReqDPoP.attach(
+        key: key,
+        access_token: "access-token",
+        clock: fn -> @iat end,
+        jti: fn -> "attached-query-jti" end
+      )
+      |> Req.request!(method: :query, url: "/search", body: "select=1")
+
+    assert response.status == 200
+    assert_receive {:query_request, request}
+    [attached_proof] = Req.Request.get_header(request, "dpop")
+    assert claims(attached_proof)["htm"] == "QUERY"
+    assert claims(attached_proof)["htu"] == "https://api.example.com/search"
+  end
+
   test "resource request is accepted by an RFC 9449-style server verifier" do
     access_token = "access-token"
     adapter = ReqDPoP.RFC9449Server.adapter(access_token: access_token, notify: self())
@@ -537,69 +575,96 @@ defmodule ReqDPoPTest do
     assert Agent.get(counter, & &1) == 2
   end
 
-  test "matches Attesto core Proof.build/3 and verify_proof/2 on the 12-URL htu matrix" do
+  test "matches Attesto core Proof.build/3 and verify_proof/2 on the shared htu vectors" do
+    vector_path =
+      System.get_env("ATTESTO_HTU_VECTORS") ||
+        Path.expand("fixtures/dpop_htu_vectors.json", __DIR__)
+
     key = Key.generate(:es256)
     jose = Key.jose_jwk(key)
     now = System.system_time(:second)
 
-    accepted_by_both = [
-      {"https://API.Example/a", "https://api.example/a"},
-      {"https://api.example:443/a", "https://api.example/a"},
-      {"https://api.example", "https://api.example/"},
-      {"https://api.example/a?x=1#frag", "https://api.example/a"},
-      {"https://[::1]:8443/a", "https://[::1]:8443/a"}
-    ]
+    %{"vectors" => vectors} = vector_path |> File.read!() |> JSON.decode!()
 
-    for {client_url, server_expected} <- accepted_by_both do
-      assert {:ok, proof} =
-               ReqDPoP.proof(key: key, htm: "GET", htu: client_url, clock: fn -> now end)
+    for vector <- vectors do
+      input = vector["input"]
+      server_expected = vector["server_expected"]
 
-      assert claims(proof)["htu"] == server_expected
-      assert {:ok, core_proof} = Proof.build(jose, "GET", client_url)
-      assert String.downcase(claims(core_proof)["htu"]) == claims(proof)["htu"]
+      if vector["req_dpop_valid"] do
+        assert ReqDPoP.normalize_htu(input) == vector["req_dpop_normalized"], input
 
-      assert {:ok, _verified} =
-               DPoP.verify_proof(proof, http_method: "GET", http_uri: server_expected, now: now)
-    end
+        assert {:ok, proof} =
+                 ReqDPoP.proof(key: key, htm: "GET", htu: input, clock: fn -> now end)
 
-    client_normalized_valid = [
-      {"https://user:pw@api.example/a", "https://api.example/a"},
-      {"https://api.example/a%zz", "https://api.example/a%zz"}
-    ]
+        assert claims(proof)["htu"] == vector["req_dpop_normalized"]
 
-    for {client_url, server_expected} <- client_normalized_valid do
-      assert {:error, :invalid_htu} = Proof.build(jose, "GET", client_url)
+        case vector["core_verify_accepts"] do
+          true ->
+            assert {:ok, _} =
+                     DPoP.verify_proof(proof,
+                       http_method: "GET",
+                       http_uri: server_expected,
+                       now: now
+                     ),
+                   input
 
-      assert {:ok, proof} =
-               ReqDPoP.proof(key: key, htm: "GET", htu: client_url, clock: fn -> now end)
+          "allow_http" ->
+            assert {:error, :invalid_htu} =
+                     DPoP.verify_proof(proof,
+                       http_method: "GET",
+                       http_uri: server_expected,
+                       now: now
+                     ),
+                   input
 
-      assert claims(proof)["htu"] == server_expected
+            assert {:ok, _} =
+                     DPoP.verify_proof(proof,
+                       http_method: "GET",
+                       http_uri: server_expected,
+                       allow_http: true,
+                       now: now
+                     ),
+                   input
 
-      assert {:ok, _verified} =
-               DPoP.verify_proof(proof, http_method: "GET", http_uri: server_expected, now: now)
-    end
-
-    refused_by_server = [
-      {"https://api.example./a", "https://api.example/a", true},
-      {"https://api.example/a%2fb", "https://api.example/a%2Fb", true},
-      {"https://api.example/a/../b", "https://api.example/b", true},
-      {"https://api.example/café", "https://api.example/café", false},
-      {"http://api.example/a", "http://api.example/a", false}
-    ]
-
-    for {client_url, server_expected, core_builds?} <- refused_by_server do
-      if core_builds? do
-        assert {:ok, _core_proof} = Proof.build(jose, "GET", client_url)
+          false ->
+            assert {:error, :invalid_htu} =
+                     DPoP.verify_proof(proof,
+                       http_method: "GET",
+                       http_uri: server_expected,
+                       now: now
+                     ),
+                   input
+        end
       else
-        assert {:error, :invalid_htu} = Proof.build(jose, "GET", client_url)
+        assert {:error, %ReqDPoP.Error{reason: {:invalid_option, :htu}}} =
+                 ReqDPoP.proof(key: key, htm: "GET", htu: input),
+               input
       end
 
-      assert {:ok, proof} =
-               ReqDPoP.proof(key: key, htm: "GET", htu: client_url, clock: fn -> now end)
+      case vector["core_proof_build"] do
+        "ok" ->
+          assert {:ok, core_proof} = Proof.build(jose, "GET", input), input
+          assert downcase_authority(claims(core_proof)["htu"]) == vector["req_dpop_normalized"]
 
-      assert {:error, :invalid_htu} =
-               DPoP.verify_proof(proof, http_method: "GET", http_uri: server_expected, now: now)
+        "allow_http_ok" ->
+          assert {:error, :invalid_htu} = Proof.build(jose, "GET", input), input
+          assert {:ok, core_proof} = Proof.build(jose, "GET", input, allow_http: true), input
+          assert downcase_authority(claims(core_proof)["htu"]) == vector["req_dpop_normalized"]
+
+        "error" ->
+          assert {:error, :invalid_htu} = Proof.build(jose, "GET", input), input
+      end
     end
+  end
+
+  defp downcase_authority(url) do
+    uri = URI.parse(url)
+
+    URI.to_string(%{
+      uri
+      | scheme: String.downcase(uri.scheme),
+        host: String.downcase(uri.host)
+    })
   end
 
   defp proof!(opts) do
