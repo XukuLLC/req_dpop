@@ -21,6 +21,9 @@ jobs:
           - elixir: "1.18"
             otp: "28"
             req: "lock"
+          - elixir: "1.20"
+            otp: "29"
+            req: "lock"
           # Oldest Req line the package allows. Req 0.6 re-runs the request
           # pipeline differently from 0.7, so both need coverage.
           - elixir: "1.18"
