@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.8.0
+
+Breaking:
+
+- `ReqDPoP.Key.load!/1`, and so `ReqDPoP.attach/2` and `ReqDPoP.proof/1`,
+  refuse a JWK whose own `use` or `key_ops` member does not allow signing
+  (RFC 7517 sections 4.2 and 4.3): `use` must be `"sig"` and `key_ops` must be
+  a list of strings containing `"sign"`. They raise `ReqDPoP.Error` with reason
+  `:invalid_key`. A key with neither member loads as before. Until now a key
+  marked `"use": "enc"` or `"key_ops": ["verify"]` signed proofs.
+- `ReqDPoP.Key.public_jwk/1` leaves `key_ops` out of the map it returns. The
+  member described the private key, so a signing key's public half came back
+  marked `"key_ops": ["sign"]`, which a verifier that checks the member
+  refuses.
+
 ## v0.7.1
 
 Fixes:

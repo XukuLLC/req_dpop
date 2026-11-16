@@ -37,7 +37,10 @@ defmodule ReqDPoP.Key do
 
   The key must be a complete private signing key: a P-256 EC key with 32-byte
   `x`, `y`, and `d`, or an RSA key of at least 2048 bits with `n`, `e`, and
-  `d`. Anything else raises `ReqDPoP.Error` with reason `:invalid_key` or
+  `d`. A JWK that carries `use` or `key_ops` (RFC 7517 sections 4.2 and 4.3)
+  must allow signing: `use` must be `"sig"`, and `key_ops` must be a list of
+  strings that contains `"sign"`. A key with neither member is accepted.
+  Anything else raises `ReqDPoP.Error` with reason `:invalid_key` or
   `:unsupported_key`. Error messages never include key material.
   """
   @spec load!(t() | JOSE.JWK.t() | map()) :: t()
@@ -74,14 +77,16 @@ defmodule ReqDPoP.Key do
   @doc """
   Exports the public JWK as a map.
 
-  The map keeps every public member of the loaded JWK, such as `kid`. The
-  proof header uses `proof_jwk/1` instead.
+  The map keeps every public member of the loaded JWK, such as `kid`, except
+  `key_ops`: the private key's operations (`sign`) do not describe what its
+  public half may do. The proof header uses `proof_jwk/1` instead.
   """
   @spec public_jwk(t()) :: map()
   def public_jwk(%__MODULE__{jwk: jwk}) do
     jwk
     |> JOSE.JWK.to_public_map()
     |> elem(1)
+    |> Map.delete("key_ops")
   end
 
   @doc """
@@ -130,7 +135,9 @@ defmodule ReqDPoP.Key do
   end
 
   defp from_jwk!(%JOSE.JWK{} = jwk) do
-    alg = jose_call!(fn -> jwk |> JOSE.JWK.to_map() |> elem(1) end) |> validate!()
+    map = jose_call!(fn -> jwk |> JOSE.JWK.to_map() |> elem(1) end)
+    alg = validate!(map)
+    validate_usage!(map)
     # The proof header is built from this map on every request; fail here,
     # with a clean error, rather than inside JOSE with key material in the
     # stack trace.
@@ -166,6 +173,19 @@ defmodule ReqDPoP.Key do
     raise Error,
       reason: :unsupported_key,
       message: "unsupported DPoP key; use a P-256 EC key or an RSA key"
+  end
+
+  # RFC 7517 sections 4.2 and 4.3. A key that says what it is for signs only
+  # if that includes signing.
+  defp validate_usage!(map) do
+    check!(Map.get(map, "use", "sig") == "sig", "the key's use does not allow signing")
+
+    key_ops = Map.get(map, "key_ops", ["sign"])
+
+    check!(
+      is_list(key_ops) and Enum.all?(key_ops, &is_binary/1) and "sign" in key_ops,
+      "the key's key_ops do not allow signing"
+    )
   end
 
   defp check!(true, _message), do: :ok

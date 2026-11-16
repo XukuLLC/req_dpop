@@ -2,7 +2,7 @@ defmodule ReqDPoP.MixProject do
   @moduledoc false
   use Mix.Project
 
-  @version "0.7.1"
+  @version "0.8.0"
   @url "https://github.com/XukuLLC/req_dpop"
   @maintainers ["Neil Berkman"]
 
@@ -65,7 +65,7 @@ defmodule ReqDPoP.MixProject do
     if System.get_env("ATTESTO_PATH") in ["1", "true"] do
       {:attesto, path: "../attesto", override: true, only: :test, runtime: false}
     else
-      {:attesto, "~> 2.21", only: :test, runtime: false}
+      {:attesto, "~> 2.25", only: :test, runtime: false}
     end
   end
 

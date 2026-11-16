@@ -817,6 +817,49 @@ defmodule ReqDPoPHardeningTest do
       assert Key.thumbprint(Key.public_jwk(key)) == Key.thumbprint(key)
     end
 
+    test "refuses a key whose use or key_ops does not allow signing" do
+      private = Key.export(Key.generate(:es256))
+
+      for usage <- [
+            %{"use" => "enc"},
+            %{"use" => nil},
+            %{"key_ops" => ["verify"]},
+            %{"key_ops" => []},
+            %{"key_ops" => "sign"},
+            %{"key_ops" => ["sign", 1]},
+            %{"use" => "sig", "key_ops" => ["verify"]}
+          ],
+          key <- [Map.merge(private, usage), JOSE.JWK.from_map(Map.merge(private, usage))] do
+        assert {:error, %ReqDPoP.Error{reason: :invalid_key, message: message}} =
+                 ReqDPoP.proof(key: key, htm: :get, htu: "https://api.example.com/r")
+
+        refute message =~ private["d"]
+        assert_raise ReqDPoP.Error, fn -> ReqDPoP.attach(Req.new(), key: key) end
+      end
+    end
+
+    test "signs with a key that declares signing use, and keeps key_ops out of the public JWK" do
+      private = Key.export(Key.generate(:es256))
+
+      for usage <- [
+            %{"use" => "sig"},
+            %{"key_ops" => ["sign"]},
+            %{"use" => "sig", "key_ops" => ["verify", "sign"], "kid" => "k1"}
+          ] do
+        map = Map.merge(private, usage)
+
+        assert {:ok, proof} = ReqDPoP.proof(key: map, htm: :get, htu: "https://api.example.com/r")
+        assert Map.keys(JOSE.JWT.peek_protected(proof).fields["jwk"]) == ["crv", "kty", "x", "y"]
+
+        public = Key.public_jwk(Key.load!(map))
+        refute Map.has_key?(public, "key_ops")
+        refute Map.has_key?(public, "d")
+        assert public["use"] == usage["use"]
+        assert public["kid"] == usage["kid"]
+        assert Key.export(Key.load!(map))["key_ops"] == usage["key_ops"]
+      end
+    end
+
     test "an empty access token means proof-only mode" do
       {:ok, log} = Agent.start_link(fn -> [] end)
       adapter = adapter(log, fn _request, _attempt -> Req.Response.new(status: 200) end)
